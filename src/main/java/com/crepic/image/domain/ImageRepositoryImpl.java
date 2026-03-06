@@ -1,13 +1,12 @@
-package com.crepic.image.infrastructure; // 패키지는 프로젝트 구조에 맞게 조정하세요.
+package com.crepic.image.domain; // 패키지는 프로젝트 구조에 맞게 조정하세요.
 
-import com.crepic.image.domain.Image;
-import com.crepic.image.domain.ImageRepositoryCustom;
 import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.SliceImpl;
+import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
@@ -16,6 +15,7 @@ import static com.crepic.image.domain.QImage.image;
 import static com.crepic.image.domain.QCategory.category;
 import static com.crepic.member.domain.QMember.member;
 
+@Repository
 @RequiredArgsConstructor
 public class ImageRepositoryImpl implements ImageRepositoryCustom {
 

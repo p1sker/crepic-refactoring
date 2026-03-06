@@ -98,9 +98,10 @@ public class Member extends BaseEntity {
 
     public void changeNickname(String newNickname) {
         Assert.hasText(newNickname, "변경할 닉네임은 비어있을 수 없습니다.");
-        if (this.nickname.equals(newNickname)) {
-            return;
-        }
+        // ⭐️ DB 에러가 나기 전에 도메인에서 먼저 컷! (DB 컬럼 길이 10)
+        Assert.isTrue(newNickname.length() <= 10, "닉네임은 10자를 초과할 수 없습니다.");
+
+        if (this.nickname.equals(newNickname)) return;
         this.nickname = newNickname;
     }
 

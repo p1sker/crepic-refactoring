@@ -7,7 +7,7 @@ import com.crepic.member.domain.Member;
 import com.crepic.member.domain.MemberRepository;
 import com.crepic.member.domain.MemberStatus;
 import com.crepic.member.dto.MemberLoginRequest;
-import com.crepic.member.dto.MemberLoginResponse; // ⭐️ 추가됨! (DTO 반환용)
+import com.crepic.member.dto.MemberLoginResponse;
 import com.crepic.member.dto.MemberSignUpRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -188,18 +188,24 @@ public class MemberService {
     @Transactional
     public void logout(String accessToken, String email) {
 
+        // 1. Refresh Token 삭제 (토큰 재발급 원천 차단)
         if (Boolean.TRUE.equals(redisTemplate.hasKey("jwt:refresh:" + email))) {
             redisTemplate.delete("jwt:refresh:" + email);
         }
 
-        Long expiration = jwtTokenProvider.getExpiration(accessToken);
+        // 🚨 [수정 완벽 적용] 토큰의 '절대 만료 시간'을 가져와서 '현재 시간'을 빼줍니다!
+        Long expirationTime = jwtTokenProvider.getExpiration(accessToken);
+        long remainingTime = expirationTime - System.currentTimeMillis();
 
-        redisTemplate.opsForValue().set(
-                "jwt:blacklist:" + accessToken,
-                "logout",
-                expiration,
-                TimeUnit.MILLISECONDS
-        );
+        // ⭐️ 남은 시간이 0보다 클 때만 (아직 유효기간이 남아있는 토큰일 때만) 블랙리스트에 올림!
+        if (remainingTime > 0) {
+            redisTemplate.opsForValue().set(
+                    "jwt:blacklist:" + accessToken,
+                    "logout",
+                    remainingTime,
+                    TimeUnit.MILLISECONDS
+            );
+        }
 
         log.info("로그아웃 성공 및 블랙리스트 등록 완료 - email: {}", email);
     }

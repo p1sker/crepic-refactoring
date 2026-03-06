@@ -4,7 +4,6 @@ import com.crepic.image.domain.Image;
 import com.crepic.image.domain.ImageRepository;
 import com.crepic.image.dto.ImageResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,18 +24,21 @@ import java.util.concurrent.TimeUnit;
 public class ImageService {
 
     private final ImageRepository imageRepository;
-    private final StringRedisTemplate redisTemplate; // ⭐️ 추가됨
-    private final ObjectMapper objectMapper;         // ⭐️ JSON 파싱용 추가됨
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
 
     private static final String FIRST_PAGE_CACHE_KEY = "images:gallery:firstPage";
     private static final int CACHE_TTL_MINUTES = 5;
+
+    // ⭐️ S+++급 핵심: 캐싱 전용 DTO (데이터 목록과 hasNext를 한 번에 저장/복원하기 위함)
+    public record ImagePageCacheDto(List<ImageResponse> content, boolean hasNext) {}
 
     /**
      * [메인 페이지 캐싱 + 무한 스크롤 조회]
      */
     public Slice<ImageResponse> getAllImagesByCursor(Long lastImageId, int pageSize) {
 
-        // ⭐️ 1. S+++급 로직: 첫 페이지(lastImageId == null) 조회일 경우에만 Redis 캐시를 탄다.
+        // 1. 첫 페이지(lastImageId == null) 조회일 경우에만 Redis 캐시를 탄다.
         if (lastImageId == null && pageSize == 20) {
             try {
                 // Redis에서 캐시 데이터 조회 (Look-aside Cache)
@@ -44,12 +46,12 @@ public class ImageService {
 
                 if (cachedData != null) {
                     log.info("메인 페이지 이미지 Redis 캐시 Hit!");
-                    // JSON String -> List<ImageResponse> 복원
-                    List<ImageResponse> cachedList = objectMapper.readValue(cachedData, new TypeReference<List<ImageResponse>>() {});
 
-                    // Slice 객체로 재조립하여 반환 (첫 페이지는 보통 다음 페이지가 있다고 가정(true)하거나, 사이즈로 계산)
-                    boolean hasNext = cachedList.size() == pageSize;
-                    return new SliceImpl<>(cachedList, PageRequest.of(0, pageSize), hasNext);
+                    // 🚨 [수정 1] JSON String -> ImagePageCacheDto 복원 (hasNext까지 완벽 복원)
+                    ImagePageCacheDto cachedDto = objectMapper.readValue(cachedData, ImagePageCacheDto.class);
+
+                    // 🚨 [수정 2] 사이즈 비교로 추측하지 않고, 캐싱된 '진짜' hasNext를 사용하여 Slice 조립!
+                    return new SliceImpl<>(cachedDto.content(), PageRequest.of(0, pageSize), cachedDto.hasNext());
                 }
             } catch (Exception e) {
                 // 캐시 파싱 에러가 나더라도 서비스는 정상 동작해야 하므로 에러만 남기고 DB 조회로 넘어감
@@ -61,10 +63,13 @@ public class ImageService {
         Slice<Image> fetchResult = imageRepository.findImagesByCursor(lastImageId, pageSize);
         Slice<ImageResponse> responseSlice = fetchResult.map(ImageResponse::from);
 
-        // ⭐️ 3. DB에서 첫 페이지를 가져온 경우라면, 다음 사람을 위해 Redis에 캐싱해둔다. (Write Cache)
+        // 3. DB에서 첫 페이지를 가져온 경우라면, 다음 사람을 위해 Redis에 캐싱해둔다. (Write Cache)
         if (lastImageId == null && pageSize == 20 && responseSlice.hasContent()) {
             try {
-                String jsonString = objectMapper.writeValueAsString(responseSlice.getContent());
+                // 🚨 [수정 3] 단순히 List만 저장하지 않고, hasNext 정보까지 통째로 DTO에 담아서 직렬화합니다!
+                ImagePageCacheDto cacheDto = new ImagePageCacheDto(responseSlice.getContent(), responseSlice.hasNext());
+                String jsonString = objectMapper.writeValueAsString(cacheDto);
+
                 redisTemplate.opsForValue().set(FIRST_PAGE_CACHE_KEY, jsonString, CACHE_TTL_MINUTES, TimeUnit.MINUTES);
                 log.info("메인 페이지 이미지 Redis 캐시 저장 완료");
             } catch (JsonProcessingException e) {
