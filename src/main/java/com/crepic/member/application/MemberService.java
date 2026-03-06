@@ -9,10 +9,13 @@ import com.crepic.member.domain.MemberStatus;
 import com.crepic.member.dto.MemberLoginRequest;
 import com.crepic.member.dto.MemberSignUpRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j; // ⭐️ 동시성 이슈 로깅을 위해 추가
+import org.springframework.dao.DataIntegrityViolationException; // ⭐️ DB 유니크 예외 캐치용 추가
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+@Slf4j // ⭐️ 에러 상황을 서버 콘솔에 남기기 위해 추가
 @Service
 @RequiredArgsConstructor
 // ⭐️ S+++급 디테일 1: 클래스 레벨은 '읽기 전용'으로 덮어버립니다. (조회 성능 극대화)
@@ -44,11 +47,21 @@ public class MemberService {
                 .nickname(request.nickname())
                 .build();
 
-        // 4. 창고(DB)에 저장
-        Member savedMember = memberRepository.save(newMember);
+        // 4. 창고(DB)에 저장 + ⭐️ 2차 방어막 (동시성 제어 추가!)
+        try {
+            Member savedMember = memberRepository.save(newMember);
 
-        // 5. 가입된 유저의 ID 반환 (컨트롤러가 이 번호를 받아서 201 Created 응답에 씀)
-        return savedMember.getId();
+            // 5. 가입된 유저의 ID 반환 (컨트롤러가 이 번호를 받아서 201 Created 응답에 씀)
+            return savedMember.getId();
+
+        } catch (DataIntegrityViolationException e) {
+            // 🚨 0.001초 차이로 1차 방어막(existsBy)을 뚫고 들어온 요청이 DB 유니크 제약조건에 막혔을 때!
+            log.warn("회원가입 동시성 충돌 발생 (DB 유니크 제약조건 방어) - email: {}, nickname: {}", request.email(), request.nickname());
+
+            // 프론트엔드에게 500 Internal Server Error 대신, 사용자가 이해할 수 있는 비즈니스 에러로 '변환'해서 던져줍니다.
+            // (만약 ErrorCode에 이메일/닉네임 포괄 중복 에러가 없다면 하나 만들어주셔도 좋습니다. 여기선 편의상 이메일 중복으로 던집니다)
+            throw new BusinessException(ErrorCode.EMAIL_DUPLICATION);
+        }
     }
 
     // ==========================================================

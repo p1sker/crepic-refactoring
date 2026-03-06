@@ -180,4 +180,21 @@ public class Member extends BaseEntity {
         this.status = MemberStatus.ACTIVE;
     }
 
+    // ==========================================
+    // ⭐️ S+++급의 핵심: JPA 엔티티 전용 Equals & HashCode
+    // ==========================================
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Member member)) return false;
+        // id가 null이 아닐 때만 비교 (영속화된 객체 기준)
+        return id != null && id.equals(member.id);
+    }
+
+    @Override
+    public int hashCode() {
+        // 객체의 생명주기(비영속 -> 영속)와 무관하게 항상 일관된 해시코드 반환
+        return getClass().hashCode();
+    }
+
 }

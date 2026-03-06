@@ -13,6 +13,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import com.crepic.global.security.jwt.JwtAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 @Configuration
 @EnableWebSecurity // ⭐️ 스프링 시큐리티의 제어권을 직접 갖겠다는 선언
@@ -36,6 +41,7 @@ public class SecurityConfig {
                 .formLogin(AbstractHttpConfigurer::disable) // 폼 기반 로그인 비활성화
                 .httpBasic(AbstractHttpConfigurer::disable) // HTTP Basic 인증 비활성화
                 .csrf(AbstractHttpConfigurer::disable)      // CSRF 보안 비활성화 (JWT 사용 예정)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
                 // ⭐️ 세션 정책: STATELESS (서버가 세션을 만들지 않음)
                 .sessionManagement(session -> session
@@ -67,4 +73,27 @@ public class SecurityConfig {
 
         return http.build();
     }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+
+        // ⭐️ 리액트가 켜질 주소들 (실무에서는 나중에 실제 도메인 주소도 여기에 추가합니다)
+        // 리액트 기본 포트(3000)와 요즘 유행하는 Vite 기본 포트(5173)를 둘 다 열어둡니다.
+        configuration.setAllowedOrigins(List.of("http://localhost:3000", "http://localhost:5173"));
+
+        // 허용할 HTTP 메서드
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+
+        // 허용할 헤더 (Authorization 헤더 등을 모두 허용)
+        configuration.setAllowedHeaders(List.of("*"));
+
+        // 내 서버가 응답할 때 프론트엔드에서 쿠키나 인증 헤더를 읽을 수 있게 허용
+        configuration.setAllowCredentials(true);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration); // 모든 API 주소("/**")에 이 설정을 적용!
+        return source;
+    }
+
 }
