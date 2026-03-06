@@ -1,0 +1,48 @@
+spring:
+  # 1. 데이터베이스 연결 설정
+  datasource:
+    url: jdbc:postgresql://localhost:5432/crepic
+    username: postgres
+    password: ${DB_PASSWORD} # ⭐️ 암호를 직접 적지 말고 이름표로 대체!
+    driver-class-name: org.postgresql.Driver
+
+  # 2. JPA (자바 객체를 SQL로 바꿔주는 마법)
+  jpa:
+    hibernate:
+      ddl-auto: validate # Flyway를 쓰므로 자동 생성 방지
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+        highlight_sql: true # SQL을 컬러풀하게 보여주는 꿀팁 추가!
+
+  # 3. Flyway DB 형상관리 설정
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  # 4. ⭐️ AWS 및 S3 설정 (에러 해결 핵심!)
+  cloud:
+    aws:
+      region:
+        static: ap-northeast-2 # 서울 리전
+      credentials:
+        access-key: dummy # 나중에 실제 AWS 키를 넣기 전까지는 가짜 값을 채워둡니다.
+        secret-key: dummy
+      s3:
+        region: ap-northeast-2
+      stack:
+        auto: false # 실무 필수: 로컬 환경에서 AWS CloudFormation 스택 자동 검색을 끕니다.
+
+# 5. 로깅 설정 (P6Spy와 함께 쓰면 시너지 폭발)
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE # 쿼리에 들어가는 파라미터 값까지 확인!
+
+# JWT 설정 (S+++급 보안: Secret Key는 최소 32바이트 이상이어야 함)
+jwt:
+  # ⭐️ S+++급 실무 세팅: 뒤에 있던 임시 키(:c2lsdm...)를 과감하게 지워버립니다!
+  # 이제 환경변수 세팅을 안 하면, 서버를 켤 때 무조건 에러가 나면서 켜지지 않습니다.
+  secret: ${JWT_SECRET_KEY}
+  access-expiration: 3600000
