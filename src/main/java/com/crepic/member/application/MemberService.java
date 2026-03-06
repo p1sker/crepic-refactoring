@@ -1,24 +1,25 @@
 package com.crepic.member.application;
 
-import com.crepic.global.error.BusinessException; // ⭐️ 추가됨!
-import com.crepic.global.error.ErrorCode;         // ⭐️ 추가됨!
+import com.crepic.global.error.BusinessException;
+import com.crepic.global.error.ErrorCode;
 import com.crepic.global.security.jwt.JwtTokenProvider;
 import com.crepic.member.domain.Member;
 import com.crepic.member.domain.MemberRepository;
 import com.crepic.member.domain.MemberStatus;
 import com.crepic.member.dto.MemberLoginRequest;
+import com.crepic.member.dto.MemberLoginResponse; // ⭐️ 추가됨! (DTO 반환용)
 import com.crepic.member.dto.MemberSignUpRequest;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j; // ⭐️ 동시성 이슈 로깅을 위해 추가
-import org.springframework.dao.DataIntegrityViolationException; // ⭐️ DB 유니크 예외 캐치용 추가
-import org.springframework.data.redis.core.StringRedisTemplate; // ⭐️ 브루트포스 방어용 Redis 추가!
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.concurrent.TimeUnit; // ⭐️ Redis TTL 시간 단위 설정을 위해 추가!
+import java.util.concurrent.TimeUnit;
 
-@Slf4j // ⭐️ 에러 상황을 서버 콘솔에 남기기 위해 추가
+@Slf4j
 @Service
 @RequiredArgsConstructor
 // ⭐️ S+++급 디테일 1: 클래스 레벨은 '읽기 전용'으로 덮어버립니다. (조회 성능 극대화)
@@ -89,11 +90,11 @@ public class MemberService {
     }
 
     // ==========================================================
-    // ⭐️ 로그인 로직 (브루트 포스 공격 완벽 방어 추가)
+    // ⭐️ 로그인 로직 (브루트 포스 방어 + Refresh Token 적용)
     // ==========================================================
 
     // 조회가 주 목적이므로 readOnly = true (이미 클래스 레벨에 있다면 안 적어도 됩니다)
-    public String login(MemberLoginRequest request) {
+    public MemberLoginResponse login(MemberLoginRequest request) { // ⭐️ 반환 타입 DTO로 변경!
         String email = request.email();
         String lockKey = "login:lock:" + email;
         String attemptKey = "login:attempts:" + email;
@@ -101,7 +102,6 @@ public class MemberService {
         // 1. 계정 잠금 여부 확인 (DB 조회도, 암호화 연산도 하지 않고 입구에서 바로 컷!)
         if (Boolean.TRUE.equals(redisTemplate.hasKey(lockKey))) {
             log.warn("잠긴 계정 로그인 시도 차단 - email: {}", email);
-            // (추후 ErrorCode에 ACCOUNT_LOCKED 등 403 에러 코드를 하나 파서 던지면 프론트에서 타이머를 띄워주기 좋습니다)
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
 
@@ -137,10 +137,48 @@ public class MemberService {
             throw new BusinessException(ErrorCode.INVALID_MEMBER_STATUS);
         }
 
-        // ⭐️ 5. 로그인 성공 시 과거의 실패 횟수 기록을 깔끔하게 지워줍니다.
-        redisTemplate.delete(attemptKey);
+        // ⭐️ 5. 로그인 성공 시 처리
+        redisTemplate.delete(attemptKey); // 과거의 실패 횟수 기록 초기화
 
-        // 6. 모든 검문을 통과했다면 AccessToken 발급!
-        return jwtTokenProvider.createAccessToken(member.getId(), member.getRole().name());
+        // ⭐️ 6. 토큰 2개 동시 발급 (Access & Refresh)
+        String accessToken = jwtTokenProvider.createAccessToken(member.getId(), member.getRole().name());
+        String refreshToken = jwtTokenProvider.createRefreshToken(member.getId());
+
+        // ⭐️ 7. Refresh Token을 Redis에 저장 (이메일을 키값으로, TTL은 14일)
+        redisTemplate.opsForValue().set(
+                "jwt:refresh:" + member.getEmail(),
+                refreshToken,
+                14,
+                TimeUnit.DAYS
+        );
+
+        // 8. 예쁜 DTO로 감싸서 반환
+        return new MemberLoginResponse(accessToken, refreshToken);
+    }
+
+    // ==========================================================
+    // ⭐️ 로그아웃 로직 (블랙리스트 처리 추가)
+    // ==========================================================
+    @Transactional
+    public void logout(String accessToken, String email) {
+
+        // 1. Redis에서 해당 유저의 Refresh Token 삭제 (토큰 재발급 원천 차단)
+        if (Boolean.TRUE.equals(redisTemplate.hasKey("jwt:refresh:" + email))) {
+            redisTemplate.delete("jwt:refresh:" + email);
+        }
+
+        // 2. 현재 Access Token의 남은 수명(TTL)을 계산
+        Long expiration = jwtTokenProvider.getExpiration(accessToken);
+
+        // ⭐️ 3. Access Token을 블랙리스트에 올림!
+        // 영구 저장이 아닌, 토큰의 '남은 수명'만큼만 설정하여 Redis 메모리를 보호합니다.
+        redisTemplate.opsForValue().set(
+                "jwt:blacklist:" + accessToken,
+                "logout",
+                expiration,
+                TimeUnit.MILLISECONDS
+        );
+
+        log.info("로그아웃 성공 및 블랙리스트 등록 완료 - email: {}", email);
     }
 }
