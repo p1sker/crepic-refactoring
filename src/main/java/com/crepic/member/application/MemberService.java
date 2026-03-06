@@ -11,9 +11,12 @@ import com.crepic.member.dto.MemberSignUpRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j; // ⭐️ 동시성 이슈 로깅을 위해 추가
 import org.springframework.dao.DataIntegrityViolationException; // ⭐️ DB 유니크 예외 캐치용 추가
+import org.springframework.data.redis.core.StringRedisTemplate; // ⭐️ 브루트포스 방어용 Redis 추가!
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.concurrent.TimeUnit; // ⭐️ Redis TTL 시간 단위 설정을 위해 추가!
 
 @Slf4j // ⭐️ 에러 상황을 서버 콘솔에 남기기 위해 추가
 @Service
@@ -25,11 +28,15 @@ public class MemberService {
     private final MemberRepository memberRepository;
     private final PasswordEncoder passwordEncoder; // 방금 SecurityConfig에서 만든 암호화 기계!
     private final JwtTokenProvider jwtTokenProvider;
+    private final StringRedisTemplate redisTemplate; // ⭐️ Redis 의존성 주입 완료
+
+    // ⭐️ S+++급 디테일 2: 계정 잠금 정책을 상수로 관리하여 유지보수성 극대화
+    private static final int MAX_LOGIN_ATTEMPTS = 5;
+    private static final long LOCK_TIME_MINUTES = 15;
 
     /**
      * 회원가입 로직
      */
-    // ⭐️ S+++급 디테일 2: 데이터를 쓰거나 수정하는 메서드에만 진짜 트랜잭션을 걸어줍니다.
     @Transactional
     public Long signUp(MemberSignUpRequest request) {
 
@@ -59,7 +66,6 @@ public class MemberService {
             log.warn("회원가입 동시성 충돌 발생 (DB 유니크 제약조건 방어) - email: {}, nickname: {}", request.email(), request.nickname());
 
             // 프론트엔드에게 500 Internal Server Error 대신, 사용자가 이해할 수 있는 비즈니스 에러로 '변환'해서 던져줍니다.
-            // (만약 ErrorCode에 이메일/닉네임 포괄 중복 에러가 없다면 하나 만들어주셔도 좋습니다. 여기선 편의상 이메일 중복으로 던집니다)
             throw new BusinessException(ErrorCode.EMAIL_DUPLICATION);
         }
     }
@@ -83,31 +89,58 @@ public class MemberService {
     }
 
     // ==========================================================
-    // ⭐️ 로그인 로직 (비밀번호 대조 및 토큰 발급)
+    // ⭐️ 로그인 로직 (브루트 포스 공격 완벽 방어 추가)
     // ==========================================================
 
     // 조회가 주 목적이므로 readOnly = true (이미 클래스 레벨에 있다면 안 적어도 됩니다)
-    @Transactional(readOnly = true)
     public String login(MemberLoginRequest request) {
+        String email = request.email();
+        String lockKey = "login:lock:" + email;
+        String attemptKey = "login:attempts:" + email;
 
-        // 1. 회원 조회: 이메일이 우리 DB에 존재하는가?
-        Member member = memberRepository.findByEmail(request.email())
-                // ⭐️ 보안 완벽: 이메일이 없어도 "정보가 일치하지 않는다"고 뭉뚱그림
-                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_CREDENTIALS));
-
-        // 2. 비밀번호 검증: 입력한 평문 비번 vs DB에 저장된 암호화 비번 대조
-        if (!passwordEncoder.matches(request.password(), member.getPassword())) {
-            // ⭐️ 보안 완벽: 비밀번호가 틀려도 이메일이 틀렸을 때와 똑같은 에러를 던짐! (해커 혼란)
+        // 1. 계정 잠금 여부 확인 (DB 조회도, 암호화 연산도 하지 않고 입구에서 바로 컷!)
+        if (Boolean.TRUE.equals(redisTemplate.hasKey(lockKey))) {
+            log.warn("잠긴 계정 로그인 시도 차단 - email: {}", email);
+            // (추후 ErrorCode에 ACCOUNT_LOCKED 등 403 에러 코드를 하나 파서 던지면 프론트에서 타이머를 띄워주기 좋습니다)
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
 
-        // 3. 보안 점검: 정지당했거나 탈퇴한 회원은 아닌가?
+        // 2. 회원 조회: 이메일이 우리 DB에 존재하는가?
+        Member member = memberRepository.findByEmail(email)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_CREDENTIALS));
+
+        // 3. 비밀번호 검증: 입력한 평문 비번 vs DB에 저장된 암호화 비번 대조
+        if (!passwordEncoder.matches(request.password(), member.getPassword())) {
+
+            // ⭐️ 해커의 공격 방어: 틀렸을 경우 Redis에 실패 횟수 1 증가
+            Long attempts = redisTemplate.opsForValue().increment(attemptKey);
+
+            if (attempts != null && attempts == 1) {
+                // 처음 틀린 순간부터 카운터의 수명을 15분으로 설정합니다.
+                redisTemplate.expire(attemptKey, LOCK_TIME_MINUTES, TimeUnit.MINUTES);
+            }
+
+            if (attempts != null && attempts >= MAX_LOGIN_ATTEMPTS) {
+                // 5회 이상 실패 시 Lock 키(빨간딱지)를 붙이고 횟수 카운터는 날려버립니다.
+                redisTemplate.opsForValue().set(lockKey, "LOCKED", LOCK_TIME_MINUTES, TimeUnit.MINUTES);
+                redisTemplate.delete(attemptKey);
+                log.warn("비밀번호 5회 이상 실패, 계정 잠금 처리 - email: {}", email);
+                throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
+            }
+
+            log.info("비밀번호 실패 ({}회) - email: {}", attempts, email);
+            throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
+        }
+
+        // 4. 보안 점검: 정지당했거나 탈퇴한 회원은 아닌가?
         if (member.getStatus() != MemberStatus.ACTIVE) {
-            // (상태 이상 에러 코드도 따로 만들어두시면 완벽합니다!)
             throw new BusinessException(ErrorCode.INVALID_MEMBER_STATUS);
         }
 
-        // 4. 모든 검문을 통과했다면 AccessToken 발급!
+        // ⭐️ 5. 로그인 성공 시 과거의 실패 횟수 기록을 깔끔하게 지워줍니다.
+        redisTemplate.delete(attemptKey);
+
+        // 6. 모든 검문을 통과했다면 AccessToken 발급!
         return jwtTokenProvider.createAccessToken(member.getId(), member.getRole().name());
     }
 }

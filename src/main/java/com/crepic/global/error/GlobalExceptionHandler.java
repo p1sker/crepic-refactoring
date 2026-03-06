@@ -2,6 +2,7 @@ package com.crepic.global.error;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -54,5 +55,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(ErrorCode.INTERNAL_SERVER_ERROR.getStatus())
                 .body(ErrorResponse.of(ErrorCode.INTERNAL_SERVER_ERROR));
+    }
+
+    // 🛡️ JSON 파싱 에러 (타입 불일치 등)
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
+        log.warn("JSON 파싱 에러: {}", e.getMessage());
+        return ResponseEntity.status(400).body(ErrorResponse.of(ErrorCode.INVALID_INPUT_VALUE, "요청 데이터 형식이 올바르지 않습니다."));
     }
 }
