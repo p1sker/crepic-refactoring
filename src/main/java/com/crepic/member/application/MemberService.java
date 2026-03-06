@@ -27,9 +27,9 @@ import java.util.concurrent.TimeUnit;
 public class MemberService {
 
     private final MemberRepository memberRepository;
-    private final PasswordEncoder passwordEncoder; // 방금 SecurityConfig에서 만든 암호화 기계!
+    private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
-    private final StringRedisTemplate redisTemplate; // ⭐️ Redis 의존성 주입 완료
+    private final StringRedisTemplate redisTemplate;
 
     // ⭐️ S+++급 디테일 2: 계정 잠금 정책을 상수로 관리하여 유지보수성 극대화
     private static final int MAX_LOGIN_ATTEMPTS = 5;
@@ -48,25 +48,20 @@ public class MemberService {
         // 2. 무기 장착: 비밀번호 암호화 (절대 평문으로 DB에 넣지 않음)
         String encodedPassword = passwordEncoder.encode(request.password());
 
-        // 3. 엔티티 조립 (우리가 만든 Builder 패턴 활용)
-        Member newMember = Member.builder()
-                .email(request.email())
-                .password(encodedPassword) // 암호화된 비밀번호 삽입!
-                .nickname(request.nickname())
-                .build();
+        // 3. 엔티티 조립 (정적 팩토리 메서드 create 활용하여 안전하게 생성)
+        Member newMember = Member.create(
+                request.email(),
+                encodedPassword,
+                request.nickname()
+        );
 
         // 4. 창고(DB)에 저장 + ⭐️ 2차 방어막 (동시성 제어 추가!)
         try {
             Member savedMember = memberRepository.save(newMember);
-
-            // 5. 가입된 유저의 ID 반환 (컨트롤러가 이 번호를 받아서 201 Created 응답에 씀)
             return savedMember.getId();
 
         } catch (DataIntegrityViolationException e) {
-            // 🚨 0.001초 차이로 1차 방어막(existsBy)을 뚫고 들어온 요청이 DB 유니크 제약조건에 막혔을 때!
             log.warn("회원가입 동시성 충돌 발생 (DB 유니크 제약조건 방어) - email: {}, nickname: {}", request.email(), request.nickname());
-
-            // 프론트엔드에게 500 Internal Server Error 대신, 사용자가 이해할 수 있는 비즈니스 에러로 '변환'해서 던져줍니다.
             throw new BusinessException(ErrorCode.EMAIL_DUPLICATION);
         }
     }
@@ -77,14 +72,12 @@ public class MemberService {
 
     private void checkDuplicateEmail(String email) {
         if (memberRepository.existsByEmail(email)) {
-            // ✅ 완벽해진 방어 로직: 쌩뚱맞은 에러 대신, 우리가 약속한 규격의 에러를 던집니다!
             throw new BusinessException(ErrorCode.EMAIL_DUPLICATION);
         }
     }
 
     private void checkDuplicateNickname(String nickname) {
         if (memberRepository.existsByNickname(nickname)) {
-            // ✅ 손으로 타이핑하다 오타 낼 일이 0%가 되었습니다!
             throw new BusinessException(ErrorCode.NICKNAME_DUPLICATION);
         }
     }
@@ -92,9 +85,7 @@ public class MemberService {
     // ==========================================================
     // ⭐️ 로그인 로직 (브루트 포스 방어 + Refresh Token 적용)
     // ==========================================================
-
-    // 조회가 주 목적이므로 readOnly = true (이미 클래스 레벨에 있다면 안 적어도 됩니다)
-    public MemberLoginResponse login(MemberLoginRequest request) { // ⭐️ 반환 타입 DTO로 변경!
+    public MemberLoginResponse login(MemberLoginRequest request) {
         String email = request.email();
         String lockKey = "login:lock:" + email;
         String attemptKey = "login:attempts:" + email;
@@ -105,23 +96,19 @@ public class MemberService {
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
 
-        // 2. 회원 조회: 이메일이 우리 DB에 존재하는가?
+        // 2. 회원 조회
         Member member = memberRepository.findByEmail(email)
                 .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_CREDENTIALS));
 
-        // 3. 비밀번호 검증: 입력한 평문 비번 vs DB에 저장된 암호화 비번 대조
+        // 3. 비밀번호 검증
         if (!passwordEncoder.matches(request.password(), member.getPassword())) {
-
-            // ⭐️ 해커의 공격 방어: 틀렸을 경우 Redis에 실패 횟수 1 증가
             Long attempts = redisTemplate.opsForValue().increment(attemptKey);
 
             if (attempts != null && attempts == 1) {
-                // 처음 틀린 순간부터 카운터의 수명을 15분으로 설정합니다.
                 redisTemplate.expire(attemptKey, LOCK_TIME_MINUTES, TimeUnit.MINUTES);
             }
 
             if (attempts != null && attempts >= MAX_LOGIN_ATTEMPTS) {
-                // 5회 이상 실패 시 Lock 키(빨간딱지)를 붙이고 횟수 카운터는 날려버립니다.
                 redisTemplate.opsForValue().set(lockKey, "LOCKED", LOCK_TIME_MINUTES, TimeUnit.MINUTES);
                 redisTemplate.delete(attemptKey);
                 log.warn("비밀번호 5회 이상 실패, 계정 잠금 처리 - email: {}", email);
@@ -132,19 +119,19 @@ public class MemberService {
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
 
-        // 4. 보안 점검: 정지당했거나 탈퇴한 회원은 아닌가?
+        // 4. 보안 점검
         if (member.getStatus() != MemberStatus.ACTIVE) {
             throw new BusinessException(ErrorCode.INVALID_MEMBER_STATUS);
         }
 
-        // ⭐️ 5. 로그인 성공 시 처리
-        redisTemplate.delete(attemptKey); // 과거의 실패 횟수 기록 초기화
+        // 5. 로그인 성공 시 처리
+        redisTemplate.delete(attemptKey);
 
-        // ⭐️ 6. 토큰 2개 동시 발급 (Access & Refresh)
+        // 6. 토큰 발급
         String accessToken = jwtTokenProvider.createAccessToken(member.getId(), member.getRole().name());
         String refreshToken = jwtTokenProvider.createRefreshToken(member.getId());
 
-        // ⭐️ 7. Refresh Token을 Redis에 저장 (이메일을 키값으로, TTL은 14일)
+        // 7. Refresh Token을 Redis에 저장
         redisTemplate.opsForValue().set(
                 "jwt:refresh:" + member.getEmail(),
                 refreshToken,
@@ -152,26 +139,61 @@ public class MemberService {
                 TimeUnit.DAYS
         );
 
-        // 8. 예쁜 DTO로 감싸서 반환
         return new MemberLoginResponse(accessToken, refreshToken);
     }
 
     // ==========================================================
-    // ⭐️ 로그아웃 로직 (블랙리스트 처리 추가)
+    // 🔄 토큰 재발급 로직 (Refresh Token 교환소)
+    // ==========================================================
+    public MemberLoginResponse reissue(String refreshToken) {
+
+        // 1. Refresh Token 자체의 유효성(위변조, 만료 여부) 검증
+        if (!jwtTokenProvider.validateToken(refreshToken)) {
+            log.warn("유효하지 않은 Refresh Token으로 재발급 시도");
+            throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
+        }
+
+        // 2. 토큰에서 유저 ID 추출 및 회원 조회
+        Long memberId = jwtTokenProvider.getMemberIdFromToken(refreshToken);
+        Member member = memberRepository.findById(memberId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.INVALID_CREDENTIALS));
+
+        // 3. Redis에 저장된 Refresh Token과 일치하는지 검증 (로그아웃된 토큰인지 확인)
+        String redisRefreshToken = redisTemplate.opsForValue().get("jwt:refresh:" + member.getEmail());
+        if (redisRefreshToken == null || !redisRefreshToken.equals(refreshToken)) {
+            log.warn("탈취되거나 이미 로그아웃된 Refresh Token 사용 시도 - email: {}", member.getEmail());
+            throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
+        }
+
+        // 4. ⭐️ RTR(Refresh Token Rotation) 적용: Access와 Refresh 둘 다 새로 발급!
+        String newAccessToken = jwtTokenProvider.createAccessToken(member.getId(), member.getRole().name());
+        String newRefreshToken = jwtTokenProvider.createRefreshToken(member.getId());
+
+        // 5. Redis의 Refresh Token 갱신
+        redisTemplate.opsForValue().set(
+                "jwt:refresh:" + member.getEmail(),
+                newRefreshToken,
+                14,
+                TimeUnit.DAYS
+        );
+
+        log.info("JWT 토큰 재발급 완료 - email: {}", member.getEmail());
+
+        return new MemberLoginResponse(newAccessToken, newRefreshToken);
+    }
+
+    // ==========================================================
+    // ⭐️ 로그아웃 로직 (블랙리스트 처리)
     // ==========================================================
     @Transactional
     public void logout(String accessToken, String email) {
 
-        // 1. Redis에서 해당 유저의 Refresh Token 삭제 (토큰 재발급 원천 차단)
         if (Boolean.TRUE.equals(redisTemplate.hasKey("jwt:refresh:" + email))) {
             redisTemplate.delete("jwt:refresh:" + email);
         }
 
-        // 2. 현재 Access Token의 남은 수명(TTL)을 계산
         Long expiration = jwtTokenProvider.getExpiration(accessToken);
 
-        // ⭐️ 3. Access Token을 블랙리스트에 올림!
-        // 영구 저장이 아닌, 토큰의 '남은 수명'만큼만 설정하여 Redis 메모리를 보호합니다.
         redisTemplate.opsForValue().set(
                 "jwt:blacklist:" + accessToken,
                 "logout",
