@@ -99,4 +99,21 @@ public class MemberController {
         }
         throw new IllegalArgumentException("유효하지 않은 인증 헤더입니다.");
     }
+
+
+    // ==========================================
+    // 🔄 4. 토큰 재발급 API (⭐️ 누락된 부분 추가!)
+    // ==========================================
+    @Operation(summary = "토큰 재발급", description = "만료된 Access Token을 갱신하기 위해 Refresh Token을 보냅니다.")
+    @ApiResponse(responseCode = "200", description = "재발급 성공 (새로운 Access/Refresh 토큰 반환)")
+    @PostMapping(value = "/reissue", produces = "application/json")
+    public ResponseEntity<MemberLoginResponse> reissue(
+            // Access Token과 달리 Refresh Token은 헤더 이름을 커스텀해서 받는 경우가 많습니다.
+            @RequestHeader("Refresh-Token") String refreshToken) {
+
+        // 서비스에서 새로 발급된 토큰 2개가 담긴 가방(DTO)을 받아옴
+        MemberLoginResponse response = memberService.reissue(refreshToken);
+
+        return ResponseEntity.ok(response);
+    }
 }

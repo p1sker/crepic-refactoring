@@ -55,7 +55,11 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/members").permitAll()
 
                         // 향후 로그인 API 주소 (미리 허용)
-                        .requestMatchers(HttpMethod.POST, "/api/members/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/members/login", "/api/members/reissue").permitAll()
+
+                        // 💣 [S급 꼼수] JMeter 동시성 부하 테스트를 위해 쿠폰 API 일시적 전면 개방!
+                        // (실무에서는 테스트 끝나면 반드시 지우고 authenticated()로 돌려놔야 합니다)
+                        .requestMatchers(HttpMethod.POST, "/api/coupons/**").permitAll()
 
                         // ⭐️ Swagger 문서 주소 허용 (문서가 안 보이면 안 되니까요!)
                         .requestMatchers(
