@@ -1,10 +1,15 @@
 spring:
-  # 1. 데이터베이스 연결 설정
+  # 1. 데이터베이스 연결 및 HikariCP (커넥션 풀) 설정 🚀 [대규모 트래픽 핵심]
   datasource:
     url: jdbc:postgresql://localhost:5432/crepic
     username: postgres
     password: ${DB_PASSWORD} # ⭐️ 암호를 직접 적지 말고 이름표로 대체!
     driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: CrepicHikariPool     # 모니터링 시 커넥션 풀을 식별하기 위한 명시적 이름
+      maximum-pool-size: 10           # 1000 TPS 부하 시나리오에서 병목을 테스트하기 위한 기준점
+      connection-timeout: 30000       # 30초 동안 커넥션을 얻지 못하면 Timeout 예외 발생 (장애 인지용)
+      max-lifetime: 1800000           # 30분. DB의 wait_timeout보다 약간 짧게 설정하는 것이 정석
 
   # 2. JPA (자바 객체를 SQL로 바꿔주는 마법)
   jpa:
@@ -21,13 +26,13 @@ spring:
     enabled: true
     baseline-on-migrate: true
 
-  # 4. ⭐️ AWS 및 S3 설정 (에러 해결 핵심!)
+  # 4. ⭐️ AWS 및 S3 설정
   cloud:
     aws:
       region:
         static: ap-northeast-2 # 서울 리전
       credentials:
-        access-key: dummy # 나중에 실제 AWS 키를 넣기 전까지는 가짜 값을 채워둡니다.
+        access-key: dummy # 실제 AWS 환경 전 로컬용 더미 값
         secret-key: dummy
       s3:
         region: ap-northeast-2
@@ -40,9 +45,23 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.orm.jdbc.bind: TRACE # 쿼리에 들어가는 파라미터 값까지 확인!
 
-# JWT 설정 (S+++급 보안: Secret Key는 최소 32바이트 이상이어야 함)
+# 6. JWT 설정 (S+++급 보안)
 jwt:
-  # ⭐️ S+++급 실무 세팅: 뒤에 있던 임시 키(:c2lsdm...)를 과감하게 지워버립니다!
-  # 이제 환경변수 세팅을 안 하면, 서버를 켤 때 무조건 에러가 나면서 켜지지 않습니다.
+  # ⭐️ 실무 세팅: 환경변수 세팅 안 하면 서버 기동 실패를 유도하는 Fail-Fast 전략
   secret: ${JWT_SECRET_KEY}
   access-expiration: 3600000
+
+# 7. 🔥 [추가됨] 모니터링 및 Actuator 설정 (Toss/Kakao 면접 프리패스용)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health, prometheus, metrics" # 상태 체크, 프로메테우스 수집용 엔드포인트 개방
+  endpoint:
+    health:
+      show-details: always # DB, Redis 등 연동된 컴포넌트의 상세 Health Check 노출
+  metrics:
+    tags:
+      application: crepic-refactoring # 대시보드에서 애플리케이션 식별 태그
+    enable:
+      hikaricp: true # ⭐️ 이 옵션이 켜져 있어야 부하 테스트 시 DB 커넥션 병목을 관측할 수 있음!
