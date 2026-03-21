@@ -10,7 +10,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.redis.core.StringRedisTemplate; // ⭐️ 요걸로 임포트!
+import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.CountDownLatch;
@@ -21,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
+@Import(RedisTestContainerConfig.class)
 class CouponLockFreeFacadeTest {
 
     @Autowired
@@ -29,7 +31,6 @@ class CouponLockFreeFacadeTest {
     @Autowired
     private CouponIssueWorker couponIssueWorker;
 
-    // ⭐️ 무조건 StringRedisTemplate 사용!
     @Autowired
     private StringRedisTemplate redisTemplate;
 
@@ -39,47 +40,47 @@ class CouponLockFreeFacadeTest {
     @Autowired
     private CouponRepository couponRepository;
 
+    private Long targetCouponId;
+
     @BeforeEach
     void setUp() {
-        // 1. 기존 데이터 싹 비우기
-        memberCouponRepository.deleteAll();
+        // 1. 기존 데이터 초기화 (외래키 제약조건 고려하여 순서대로 삭제)
+        memberCouponRepository.deleteAllInBatch();
+        couponRepository.deleteAllInBatch();
 
-        // 2. Redis 찌꺼기 비우고 "100" 세팅 (StringRedisTemplate이므로 예쁘게 들어감)
-        redisTemplate.delete("coupon:1:count");
-        redisTemplate.delete("coupon:queue:1");
-        redisTemplate.opsForValue().set("coupon:1:count", "100");
+        // 2. 테스트용 쿠폰 생성
+        Coupon testCoupon = Coupon.builder()
+                .name("Testcontainers 선착순 쿠폰")
+                .discountAmount(1000)
+                .totalQuantity(100)
+                .validFrom(LocalDateTime.now().minusDays(1))
+                .validUntil(LocalDateTime.now().plusDays(1))
+                .build();
 
-        // 3. 쿠폰 마스터 생성
-        if (!couponRepository.existsById(1L)) {
-            Coupon dummyCoupon = Coupon.builder()
-                    .name("테스트 선착순 쿠폰")
-                    .discountAmount(1000)
-                    .totalQuantity(100)
-                    .validFrom(LocalDateTime.now().minusDays(1))
-                    .validUntil(LocalDateTime.now().plusDays(1))
-                    .build();
-            couponRepository.save(dummyCoupon);
-        }
+        Coupon savedCoupon = couponRepository.saveAndFlush(testCoupon);
+        this.targetCouponId = savedCoupon.getId();
+
+        // 3. Facade의 initCoupon을 사용하여 Redis 상태 초기화 (동적 ID 사용)
+        couponLockFreeFacade.initCoupon(targetCouponId, 100);
     }
 
     @Test
     @DisplayName("1000명이 동시에 쿠폰 발급을 요청하면, 100명만 Redis 큐에 들어가고 나머지는 튕겨야 한다.")
     void issueCoupon_Concurrent_1000_Requests() throws InterruptedException {
+        // given
         int threadCount = 1000;
         CountDownLatch latch = new CountDownLatch(threadCount);
-
-        // 에러 원인 파악을 위한 카운터
         AtomicInteger errorCount = new AtomicInteger(0);
 
         try (ExecutorService executorService = Executors.newFixedThreadPool(32)) {
+            // when
             for (int i = 0; i < threadCount; i++) {
                 long memberId = i + 1;
                 executorService.submit(() -> {
                     try {
-                        // 🚨 Facade 내부의 키 이름이 "coupon:1:count" 와 "coupon:queue:1" 이 맞는지 꼭 확인해!
-                        couponLockFreeFacade.issueCouponLockFree(memberId, 1L);
+                        // 생성된 진짜 ID로 요청 폭격!
+                        couponLockFreeFacade.issueCouponLockFree(memberId, targetCouponId);
                     } catch (Exception e) {
-                        // "소진" 에러가 아닌 진짜 시스템 에러만 5개까지 출력해봄
                         if (e.getMessage() == null || !e.getMessage().contains("소진")) {
                             if (errorCount.incrementAndGet() <= 5) {
                                 System.out.println("❌ 찐 에러 발생!: " + e.getMessage());
@@ -93,20 +94,23 @@ class CouponLockFreeFacadeTest {
             latch.await();
         }
 
-        // 중간 점검
-        Long queueSizeBefore = redisTemplate.opsForList().size("coupon:queue:1");
+        // then
+        // 1. Redis 큐에 정확히 100명이 있는지 확인
+        String queueKey = "coupon:queue:" + targetCouponId;
+        Long queueSizeBefore = redisTemplate.opsForList().size(queueKey);
         System.out.println("🔥 일개미 투입 전 Redis 큐 대기자 수 (기대값 100): " + queueSizeBefore);
+        assertThat(queueSizeBefore).isEqualTo(100);
 
-        // 일개미 출동
-        System.out.println("👷 일개미(Worker) 수동 호출 시작...");
-        couponIssueWorker.processQueue(); // 네 메서드 이름으로 호출
+        // 2. 일개미(Worker)에게 진짜 ID를 주며 수동 호출
+        System.out.println("👷 일개미(Worker) 수동 호출 시작... 쿠폰 ID: " + targetCouponId);
+        couponIssueWorker.processQueue(targetCouponId);
         System.out.println("👷 일개미(Worker) 작업 완료!");
 
-        // 결과 검증
+        // 3. 최종 DB 데이터 확인
         long finalCount = memberCouponRepository.count();
         System.out.println("✅ 최종 DB에 저장된 발급 내역 수: " + finalCount);
         assertThat(finalCount).isEqualTo(100);
 
-        System.out.println("🎉 테스트 완벽 통과! 동시성 방어 100% 성공!");
+        System.out.println("🎉 [Phase 4] 동시성 방어 & Testcontainers 연동 성공!");
     }
 }
