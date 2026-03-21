@@ -1,0 +1,56 @@
+spring:
+  # 1. 데이터베이스 연결 (테스트 환경이므로 실제 비밀번호를 직접 주입!)
+  datasource:
+    url: jdbc:postgresql://localhost:5432/crepic
+    username: postgres
+    password: fkdls@8967
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: CrepicTestPool
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      max-lifetime: 1800000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        show_sql: true
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
+  cloud:
+    aws:
+      region:
+        static: ap-northeast-2
+      credentials:
+        access-key: dummy
+        secret-key: dummy
+      s3:
+        region: ap-northeast-2
+      stack:
+        auto: false
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+
+# 6. JWT 설정 (테스트가 뻗지 않도록 아무거나 긴 더미 텍스트 주입!)
+jwt:
+  secret: "thisisaverylongdummysecretkeyfortestingpurposes" # 🚨 수정 포인트 2 (테스트용이므로 이대로 둬도 됨!)
+  access-expiration: 3600000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health, prometheus, metrics"

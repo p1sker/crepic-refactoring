@@ -49,6 +49,8 @@ dependencies {
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.2'
+	//6. 기본 통합 테스트를 위한 필수 코어 라이브러리 (JUnit, AssertJ 포함)
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	// ⭐️ 1. Querydsl (Spring Boot 3.0 이상 공식 설정 방식)
 	implementation 'com.querydsl:querydsl-jpa:5.1.0:jakarta'
 	annotationProcessor "com.querydsl:querydsl-apt:5.1.0:jakarta"
@@ -69,6 +71,7 @@ dependencies {
 
 	// ⭐️ 5. P6Spy (SQL 로깅 가독성)
 	implementation 'com.github.gavlyukovskiy:p6spy-spring-boot-starter:1.9.1'
+
 }
 
 tasks.named('test') {

@@ -3,6 +3,7 @@ package com.crepic.coupon.application;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -11,7 +12,8 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class CouponIssueWorker {
 
-    private final RedisTemplate<String, String> redisTemplate;
+    // 기존: private final RedisTemplate<String, String> redisTemplate;
+    private final StringRedisTemplate redisTemplate; // ⭐️ 여기도 똑같이 변경!
 
     // ⭐️ 예전에 만들어둔 '진짜 DB 저장 로직'을 여기서 불러옴!
     private final CouponService couponService;
