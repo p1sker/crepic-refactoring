@@ -45,6 +45,13 @@ spring:
       host: localhost
       port: 6379
 
+  # 9. 🚀 [NEW] Kafka 설정 (Phase 5: 데이터 영속성 및 비동기 메시지 브로커)
+  kafka:
+    bootstrap-servers: localhost:9092 # 도커로 띄운 카프카 공장 주소
+    consumer:
+      group-id: crepic-group          # 우리 프로젝트 컨슈머 팀 이름
+      auto-offset-reset: earliest     # ⭐️ 서버가 꺼져있을 때 들어온 메시지도 처음부터 다 읽어오라는 필수 세팅!
+
 # 5. 로깅 설정 (P6Spy와 함께 쓰면 시너지 폭발)
 logging:
   level:
