@@ -20,6 +20,7 @@ public class CouponService {
     private final MemberCouponRepository memberCouponRepository;
     private final MemberRepository memberRepository;
 
+
     /**
      * [순수 비즈니스 로직]
      * 락(Lock) 관리는 Facade(Redis)에게 위임하고, 여기서는 순수하게 발급 로직만 처리합니다.
@@ -48,4 +49,5 @@ public class CouponService {
         log.info("쿠폰 발급 완료 - memberId: {}, 현재 수량: {}/{}",
                 memberId, coupon.getIssuedQuantity(), coupon.getTotalQuantity());
     }
+    //
 }
