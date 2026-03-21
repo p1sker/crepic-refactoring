@@ -2,46 +2,49 @@ package com.crepic.coupon.application;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class CouponLockFreeFacade {
 
-    // ⭐️ 무적의 StringRedisTemplate 적용 완료!
     private final StringRedisTemplate redisTemplate;
 
     public void issueCouponLockFree(Long memberId, Long couponId) {
-        // 🚨 [핵심 수정] 테스트 코드와 Key 이름을 똑같이 맞춤! (coupon:1:count)
         String countKey = "coupon:" + couponId + ":count";
         String queueKey = "coupon:queue:" + couponId;
 
-        // 1. [초고속 차감] Redis 원자적 연산 (락 없이 수량 1 감소)
-        Long remainCount = redisTemplate.opsForValue().decrement(countKey);
+        // 📜 Redis Lua Script: "수량을 확인하고, 0보다 크면 깎고 큐에 넣어라! 이걸 한 번에(Atomic)!"
+        String script =
+                "local count = redis.call('get', KEYS[1]) " +
+                        "if count ~= nil and tonumber(count) > 0 then " +
+                        "  redis.call('decr', KEYS[1]) " +
+                        "  redis.call('rpush', KEYS[2], ARGV[1]) " +
+                        "  return 1 " + // 성공 시 1 반환
+                        "else " +
+                        "  return 0 " + // 실패(재고 없음) 시 0 반환
+                        "end";
 
-        // ⭐️ [강제 재컴파일 + 로그 확인용] 숫자가 깎이는지 눈으로 보자!
-        System.out.println("🔥 [유저 " + memberId + "] 현재 남은 쿠폰 수량: " + remainCount);
+        // 스크립트 실행 (레디스 서버 내부에서 한 방에 실행됨)
+        Long result = redisTemplate.execute(
+                new DefaultRedisScript<>(script, Long.class),
+                List.of(countKey, queueKey), // KEYS[1], KEYS[2]
+                String.valueOf(memberId)      // ARGV[1]
+        );
 
-        // 2. [빠른 실패] 수량이 0 미만이면 즉시 예외 발생! (DB 안 가고 튕겨냄)
-        if (remainCount != null && remainCount < 0) {
+        if (result == null || result == 0) {
             throw new RuntimeException("쿠폰이 모두 소진되었습니다.");
         }
 
-        // 3. [메시지 큐] 통과한 유저는 Redis List(대기열 바구니)에 밀어 넣음
-        redisTemplate.opsForList().rightPush(queueKey, String.valueOf(memberId));
+        System.out.println("🔥 [유저 " + memberId + "] 루아 스크립트로 안전하게 발급 성공!");
     }
 
-    // [관리자용] 테스트 시작 전, Redis에 쿠폰 수량을 100개로 충전해 두는 셋업 메서드
     public void initCoupon(Long couponId, int totalQuantity) {
-        // 🚨 여기도 Key 이름을 똑같이 맞춤!
-        String countKey = "coupon:" + couponId + ":count";
-        String queueKey = "coupon:queue:" + couponId;
-
-        // 1. 기존 데이터 초기화 (혹시 남아있는 쓰레기값 삭제)
-        redisTemplate.delete(countKey);
-        redisTemplate.delete(queueKey);
-
-        // 2. Redis에 초기 쿠폰 수량 세팅
-        redisTemplate.opsForValue().set(countKey, String.valueOf(totalQuantity));
+        redisTemplate.delete("coupon:" + couponId + ":count");
+        redisTemplate.delete("coupon:queue:" + couponId);
+        redisTemplate.opsForValue().set("coupon:" + couponId + ":count", String.valueOf(totalQuantity));
     }
 }
