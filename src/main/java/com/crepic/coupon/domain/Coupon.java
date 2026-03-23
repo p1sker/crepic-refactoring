@@ -67,4 +67,8 @@ public class Coupon extends BaseEntity {
 
         this.issuedQuantity++; // 💥 여기가 바로 JMeter에 의해 터져나갈 병목 지점입니다!
     }
+
+    public void resetIssuedQuantity() {
+        this.issuedQuantity = 0;
+    }
 }

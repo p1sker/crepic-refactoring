@@ -1,7 +1,6 @@
 package com.crepic;
 
 import com.crepic.coupon.application.CouponLockFreeFacade;
-import com.crepic.coupon.application.CouponIssueWorker;
 import com.crepic.coupon.domain.Coupon;
 import com.crepic.coupon.domain.CouponRepository;
 import com.crepic.coupon.domain.MemberCouponRepository;
@@ -21,15 +20,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.kafka.consumer.auto-offset-reset=earliest")
 @Import(RedisTestContainerConfig.class)
 class CouponLockFreeFacadeTest {
 
     @Autowired
     private CouponLockFreeFacade couponLockFreeFacade;
-
-    @Autowired
-    private CouponIssueWorker couponIssueWorker;
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -50,7 +46,7 @@ class CouponLockFreeFacadeTest {
 
         // 2. 테스트용 쿠폰 생성
         Coupon testCoupon = Coupon.builder()
-                .name("Testcontainers 선착순 쿠폰")
+                .name("Kafka 선착순 쿠폰")
                 .discountAmount(1000)
                 .totalQuantity(100)
                 .validFrom(LocalDateTime.now().minusDays(1))
@@ -61,11 +57,12 @@ class CouponLockFreeFacadeTest {
         this.targetCouponId = savedCoupon.getId();
 
         // 3. Facade의 initCoupon을 사용하여 Redis 상태 초기화 (동적 ID 사용)
+        // 🚨 주의: 이제 이 메서드는 Redis 큐를 지우지 않고 '수량(count)'만 100개로 셋팅합니다.
         couponLockFreeFacade.initCoupon(targetCouponId, 100);
     }
 
     @Test
-    @DisplayName("1000명이 동시에 쿠폰 발급을 요청하면, 100명만 Redis 큐에 들어가고 나머지는 튕겨야 한다.")
+    @DisplayName("1000명이 동시에 요청하면, Redis에서 100명만 통과시켜 카프카로 보내고 DB에 100건이 저장된다.")
     void issueCoupon_Concurrent_1000_Requests() throws InterruptedException {
         // given
         int threadCount = 1000;
@@ -78,7 +75,7 @@ class CouponLockFreeFacadeTest {
                 long memberId = i + 1;
                 executorService.submit(() -> {
                     try {
-                        // 생성된 진짜 ID로 요청 폭격!
+                        // Redis 루아 스크립트로 재고 차감 -> 성공 시 Kafka 메시지 발행
                         couponLockFreeFacade.issueCouponLockFree(memberId, targetCouponId);
                     } catch (Exception e) {
                         if (e.getMessage() == null || !e.getMessage().contains("소진")) {
@@ -95,22 +92,17 @@ class CouponLockFreeFacadeTest {
         }
 
         // then
-        // 1. Redis 큐에 정확히 100명이 있는지 확인
-        String queueKey = "coupon:queue:" + targetCouponId;
-        Long queueSizeBefore = redisTemplate.opsForList().size(queueKey);
-        System.out.println("🔥 일개미 투입 전 Redis 큐 대기자 수 (기대값 100): " + queueSizeBefore);
-        assertThat(queueSizeBefore).isEqualTo(100);
-
-        // 2. 일개미(Worker)에게 진짜 ID를 주며 수동 호출
-        System.out.println("👷 일개미(Worker) 수동 호출 시작... 쿠폰 ID: " + targetCouponId);
-        couponIssueWorker.processQueue(targetCouponId);
-        System.out.println("👷 일개미(Worker) 작업 완료!");
+        // 🚀 [핵심] 일개미를 수동으로 부르지 않습니다!
+        // 카프카 컨슈머(@KafkaListener)가 백그라운드에서 메시지를 읽고 DB에 넣을 시간을 줍니다.
+        System.out.println("⏳ 카프카가 100개의 메시지를 비동기로 처리할 때까지 5초 대기합니다...");
+        Thread.sleep(10000);
 
         // 3. 최종 DB 데이터 확인
         long finalCount = memberCouponRepository.count();
         System.out.println("✅ 최종 DB에 저장된 발급 내역 수: " + finalCount);
+
         assertThat(finalCount).isEqualTo(100);
 
-        System.out.println("🎉 [Phase 4] 동시성 방어 & Testcontainers 연동 성공!");
+        System.out.println("🎉 [Phase 5] Apache Kafka 비동기 이벤트 드리븐 통합 테스트 100% 성공!");
     }
 }

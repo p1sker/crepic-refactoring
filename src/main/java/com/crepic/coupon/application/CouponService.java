@@ -49,5 +49,5 @@ public class CouponService {
         log.info("쿠폰 발급 완료 - memberId: {}, 현재 수량: {}/{}",
                 memberId, coupon.getIssuedQuantity(), coupon.getTotalQuantity());
     }
-    //
+
 }

@@ -51,17 +51,18 @@ public class SecurityConfig {
                 // 🚪 출입 통제 구역 설정
                 .authorizeHttpRequests(auth -> auth
                         // ⭐️ 핵심 수정: 회원가입 POST 요청 허용
-                        // Controller의 주소와 정확히 일치시켜야 합니다.
                         .requestMatchers(HttpMethod.POST, "/api/members").permitAll()
 
                         // 향후 로그인 API 주소 (미리 허용)
                         .requestMatchers(HttpMethod.POST, "/api/members/login", "/api/members/reissue").permitAll()
 
                         // 💣 [S급 꼼수] JMeter 동시성 부하 테스트를 위해 쿠폰 API 일시적 전면 개방!
-                        // (실무에서는 테스트 끝나면 반드시 지우고 authenticated()로 돌려놔야 합니다)
                         .requestMatchers(HttpMethod.POST, "/api/coupons/**").permitAll()
 
-                        // ⭐️ Swagger 문서 주소 허용 (문서가 안 보이면 안 되니까요!)
+                        // 🚀 [추가!!!] JMeter 부하 테스트 리셋용 API 개방! (테스트 끝나면 꼭 지우기!)
+                        .requestMatchers(HttpMethod.GET, "/test/reset").permitAll()
+
+                        // ⭐️ Swagger 문서 주소 허용
                         .requestMatchers(
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**",
